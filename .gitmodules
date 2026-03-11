@@ -1,0 +1,3 @@
+[submodule "src/gpu_sls/external/primal_dual_ilqr"]
+	path = src/gpu_sls/external/primal_dual_ilqr
+	url = https://github.com/iit-DLSLab/primal_dual_ilqr.git
