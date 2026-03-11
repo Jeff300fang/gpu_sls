@@ -1,12 +1,15 @@
 from __future__ import annotations
+
+from dataclasses import dataclass
 from functools import partial
-from jax import jit
+
 import jax
 import jax.numpy as jnp
-from jax import lax, vmap
-from gpu_sls.gpu_admm import constrained_solve
-from dataclasses import dataclass
 import jax.scipy as jsp
+from jax import jit, lax, vmap
+
+from gpu_sls.gpu_admm import constrained_solve
+from gpu_sls.external.primal_dual_ilqr.primal_dual_ilqr.primal_tvlqr import tvlqr_gpu
 
 @dataclass(frozen=True)
 class SLSConfig:
@@ -14,6 +17,9 @@ class SLSConfig:
     sls_primal_tol: float = 1e-2
     enable_fastsls: bool = True
     warm_start: bool = True
+    rti: bool = False
+    initialize_nominal: bool = True
+    max_initial_sqp_iterations: int = 0
 
 
 @jax.jit
@@ -102,12 +108,21 @@ def calculate_phis(A, B, Cx, Cxu, Cu, E):
     nw = E.shape[-1]
     A = A[:T]
     B = B[:T]
+    # def solve_one_j(j):
+    #     Qj = Cx[:, j, :, :]
+    #     Rj = Cu[:, j, :, :]
+    #     Mj = Cxu[:, j, :, :]
+    #     K = controller_pas(Qj, Rj, Mj, A, B)
+    #     return K
+    zeros_q = jnp.zeros((Tp1, nx), dtype=A.dtype)
+    zeros_r = jnp.zeros((T,  nu), dtype=A.dtype)
+    zeros_c = jnp.zeros((T,  nx), dtype=A.dtype)
     def solve_one_j(j):
-        Qj = Cx[:, j, :, :]
-        Rj = Cu[:, j, :, :]
-        Mj = Cxu[:, j, :, :]
-        K = controller_pas(Qj, Rj, Mj, A, B)
-        return K
+        Qj = Cx[:, j, :, :]     # [T+1, nx, nx]
+        Rj = Cu[:, j, :, :]     # [T,   nu, nu]
+        Mj = Cxu[:, j, :, :]    # [T,   nx, nu]
+        K, _, _, _ = tvlqr_gpu(Qj, zeros_q, Rj, zeros_r, Mj, A, B, zeros_c)
+        return K   
 
     K_all = jax.vmap(solve_one_j)(jnp.arange(T))
     K_kj_core = jnp.swapaxes(K_all, 0, 1)
@@ -280,7 +295,6 @@ def add_obstacle_tightenings(
     tightened = dist - radii[None, :] - over
     return jnp.concatenate([tightened_constraints, tightened], axis=1)
 
-
 @partial(jit, static_argnums=(0, 15))
 def sls_solve_gpu(cfg, Q: jnp.ndarray, q: jnp.ndarray,
                        R: jnp.ndarray, r: jnp.ndarray,
@@ -323,13 +337,14 @@ def sls_solve_gpu(cfg, Q: jnp.ndarray, q: jnp.ndarray,
         prev_rho = rho
         x_prev = x_curr
         u_prev = u_curr
-        mu_nominal = mu[: , :-num_obstacles]
-        eta_stage, eta_f = get_etas(mu_nominal, beta)
-        C_box = C[:, :nc - num_obstacles, :]
-        D_box = D[:, :nc - num_obstacles, :]
-        Phi_x, Phi_u = get_controller(Q_bar, R_bar, A, B, C_box, D_box, E, eta_stage, eta_f)
-        beta = get_betas(C_box, D_box, Phi_x, Phi_u)
-        h_ct = get_constraint_tightenings(beta)
+        if sls_config.rti:
+            mu_nominal = mu[: , :-num_obstacles]
+            eta_stage, eta_f = get_etas(mu_nominal, beta)
+            C_box = C[:, :nc - num_obstacles, :]
+            D_box = D[:, :nc - num_obstacles, :]
+            Phi_x, Phi_u = get_controller(Q_bar, R_bar, A, B, C_box, D_box, E, eta_stage, eta_f)
+            beta = get_betas(C_box, D_box, Phi_x, Phi_u)
+            h_ct = get_constraint_tightenings(beta)
         tightened_constraints = f[:, :-num_obstacles] - h_ct
         tightened_constraints_all = add_obstacle_tightenings(obstacles, primal_pos, h_ct, tightened_constraints)
         warm_flag = jnp.array(bool(sls_config.warm_start))
@@ -342,6 +357,13 @@ def sls_solve_gpu(cfg, Q: jnp.ndarray, q: jnp.ndarray,
         )
 
         metric = primal_convergence_metric(x_curr, u_curr, x_prev, u_prev)
+        mu_nominal = mu[: , :-num_obstacles]
+        eta_stage, eta_f = get_etas(mu_nominal, beta)
+        C_box = C[:, :nc - num_obstacles, :]
+        D_box = D[:, :nc - num_obstacles, :]
+        Phi_x, Phi_u = get_controller(Q_bar, R_bar, A, B, C_box, D_box, E, eta_stage, eta_f)
+        beta = get_betas(C_box, D_box, Phi_x, Phi_u)
+        h_ct = get_constraint_tightenings(beta)
         rho = jnp.maximum(jnp.minimum(rho, 1e4) * 0.9, 0.1)
         y = prev_rho / rho * y
         rho = jnp.asarray(rho, dtype=prev_rho.dtype)

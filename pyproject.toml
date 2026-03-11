@@ -19,7 +19,6 @@ dependencies = [
     "numpy",
     "scipy",
     "matplotlib",
-    "primal_dual_ilqr @ git+https://github.com/iit-DLSLab/primal_dual_ilqr.git@273d78d",
 ]
 
 [tool.setuptools.packages.find]

@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
@@ -8,6 +9,16 @@ import jax
 import jax.numpy as jnp
 
 import gpu_sls.sqp
+
+@dataclass
+class MPCConfig:
+    n: int
+    nu: int
+    N: int
+    W: jnp.ndarray
+    u_ref: jnp.ndarray
+    dt: float
+
 
 class GenericMPC:
     def __init__(
@@ -56,7 +67,7 @@ class GenericMPC:
         self._solve = jax.jit(work)
 
     def run(self, x0: jnp.ndarray, reference: jnp.ndarray, parameter: Any):
-        X, U, V, w, y, rho, backoffs, Phi_x, Phi_u, K_kjN, betaN, muN = self._solve(
+        X, U, V, w, y, rho, backoffs, Phi_x, Phi_u, betaN, muN = self._solve(
             reference,
             parameter,
             self.config.W,
@@ -175,4 +186,4 @@ class GenericMPC:
             operand=None,
         )
 
-        return U[0], X, U, V, backoffs, Phi_x, Phi_u, K_kjN
+        return U[0], X, U, V, backoffs, Phi_x, Phi_u

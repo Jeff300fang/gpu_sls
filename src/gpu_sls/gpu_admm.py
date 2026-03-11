@@ -1,13 +1,17 @@
 from __future__ import annotations
+
+import math
 from dataclasses import dataclass
+from functools import partial
+from typing import NamedTuple
+
 import jax
 import jax.numpy as jnp
-from jax import jit, lax, scipy, vmap
+from jax import lax, scipy, vmap
 from jax.tree_util import register_pytree_node_class
-from typing import NamedTuple
-import math
-from functools import partial
 
+from gpu_sls.external.primal_dual_ilqr.primal_dual_ilqr.dual_tvlqr import dual_lqr
+from gpu_sls.external.primal_dual_ilqr.primal_dual_ilqr.primal_tvlqr import rollout_gpu
 
 class ACPScanCache(NamedTuple):
     Ar:  jnp.ndarray
@@ -34,24 +38,6 @@ class ADMMConfig:
     def tree_unflatten(cls, aux, children):
         return cls(*children)
 
-@register_pytree_node_class
-@dataclass
-class ADMMWarmStart:
-    w: jnp.ndarray          # (T+1, m)
-    y: jnp.ndarray          # (T+1, m)
-    rho: jnp.ndarray  
-
-    def tree_flatten(self):
-        children = (self.w, self.y, self.rho)
-        return children, None
-
-    @classmethod
-    def tree_unflatten(cls, aux, children):
-        return cls(*children)
-
-# -----------------------------
-# Helpers (static-shape masking)
-# -----------------------------
 def _shift_down(x, step):
     pad = jnp.zeros((step,) + x.shape[1:], dtype=x.dtype)
     return jnp.concatenate([pad, x[:-step]], axis=0)
@@ -67,19 +53,12 @@ def _mask_downsweep(T, step):
     return (t >= (3 * step - 1)) & ((t % period) == (step - 1))
 
 def _masked_write_level(cache, level, vals, mask):
-    # cache[level, t] = vals[t] if mask[t] else 0
     m = mask.astype(vals.dtype)[:, None, None]
     return cache.at[level].set(vals * m)
 
 def _combine_acp_all(next_block, prev_block, n):
-    """
-    next_block, prev_block: (T, 3n, n)
-    Returns:
-      combined: (T, 3n, n)
-      Ar, Al, ArC, AlP, C_new, P_new: (T, n, n)
-    """
     dtype = prev_block.dtype
-    I = jnp.eye(n, dtype=dtype)[None, :, :]  # (1,n,n) for broadcasting
+    I = jnp.eye(n, dtype=dtype)[None, :, :]
 
     A_l = prev_block[:, 0:n, :]
     C_l = prev_block[:, n:2*n, :]
@@ -94,12 +73,11 @@ def _combine_acp_all(next_block, prev_block, n):
 
     # Ar = A_r @ inv1
     # Al = jnp.swapaxes(A_l, -1, -2) @ inv2
-    M1 = I + C_l @ P_r              # (T,n,n)
-    M2 = I + P_r @ C_l              # (T,n,n)
+    M1 = I + C_l @ P_r
+    M2 = I + P_r @ C_l
     Ar = jnp.swapaxes(jnp.linalg.solve(jnp.swapaxes(M1, -1, -2),
                                   jnp.swapaxes(A_r, -1, -2)), -1, -2)
 
-    # Al = A_l^T @ inv(M2) -> Al^T = solve(M2^T, A_l)
     Al = jnp.swapaxes(jnp.linalg.solve(jnp.swapaxes(M2, -1, -2), A_l), -1, -2)
 
     ArC = Ar @ C_l
@@ -113,9 +91,6 @@ def _combine_acp_all(next_block, prev_block, n):
     return combined, Ar, Al, ArC, AlP, C_new, P_new
 
 
-# -----------------------------
-# JAX: cache-producing scan over (A,C,P)
-# -----------------------------
 @partial(jax.jit, static_argnums=(1, 2, 3))
 def associative_scan_cache_acp_jax(elems_acp, T: int, n: int, reverse: bool = False):
     dtype = elems_acp.dtype
@@ -184,9 +159,6 @@ def associative_scan_cache_acp_jax(elems_acp, T: int, n: int, reverse: bool = Fa
     return out, ACPScanCache(Ar=Ar, Al=Al, ArC=ArC, AlP=AlP, Cn=Cn, Pn=Pn)
 
 
-# -----------------------------
-# JAX: propagate (c,p) using caches (no inverses)
-# -----------------------------
 @partial(jax.jit, static_argnums=(2, 4))
 def associative_scan_use_cache_cp_jax(c, p, T: int, cache: ACPScanCache, reverse: bool = False):
     Ar, Al, ArC, AlP = cache.Ar, cache.Al, cache.ArC, cache.AlP
@@ -244,61 +216,14 @@ def associative_scan_use_cache_cp_jax(c, p, T: int, cache: ACPScanCache, reverse
 
     return c_out, p_out
 
-@jit
-def dual_lqr(X, P, p):
-    """Dual LQR solve.
-
-    Args:
-      P: [T+1, n, n]   numpy array.
-      p: [T+1, n]      numpy array.
-      X: [T+1, n]      numpy array.
-
-    Returns:
-      V: [T+1, n] numpy array.
-    """
-    Tp1 = X.shape[0]
-    return vmap(lambda t: P[t] @ X[t] + p[t])(jnp.arange(Tp1))
-
-@jit
-def rollout_gpu(K, k, x0, A, B, c):
-    """Rolls-out time-varying linear policy u[t] = K[t] x[t] + k[t]."""
-    T, _, n = K.shape
-
-    def fn(prev, next):
-        F = prev[:-1]
-        f = prev[-1]
-        G = next[:-1]
-        g = next[-1]
-        return jnp.concatenate([G @ F, (g + G @ f).reshape([1, n])])
-
-    get_elem = lambda t: jnp.concatenate(
-        [A[t] + B[t] @ K[t], (c[t] + B[t] @ k[t]).reshape([1, n])]
-    )
-    elems = vmap(get_elem)(jnp.arange(T))
-    comp = lax.associative_scan(lambda l, r: vmap(fn)(l, r), elems)
-    X = jnp.concatenate(
-        [
-            x0.reshape(1, n),
-            vmap(lambda t: comp[t, :-1, :] @ x0 + comp[t, -1, :])(jnp.arange(T)),
-        ]
-    )
-
-    U = vmap(lambda t: K[t] @ X[t] + k[t])(jnp.arange(T))
-
-    return X, U
-
 def admm_augment_xu(Q, q, R, r, M, C, D, w_bar, y_bar, rho):
     s_bar = w_bar - y_bar   
-    # CtC: (T, nx, nx)
+
     CtC = jnp.einsum('tmi,tmj->tij', C, C)
-    # DtD: (T, nu, nu)
     DtD = jnp.einsum('tmi,tmj->tij', D, D)
-    # CtD: (T, nx, nu)
     CtD = jnp.einsum('tmi,tmj->tij', C, D)
 
-    # C^T sbar: (T, nx)
     Ct_s = jnp.einsum('tmi,tm->ti', C, s_bar)
-    # D^T sbar: (T, nu)
     Dt_s = jnp.einsum('tmi,tm->ti', D, s_bar)
 
     tilde_Q = Q + rho * CtC
@@ -335,29 +260,20 @@ def admm_augment_xu(Q, q, R, r, M, C, D, w_bar, y_bar, rho):
 #     return r_norm, s_norm, eps_pri, eps_dual
 
 def admm_residuals(z, w, w_prev, y, rho, eps_abs=1e-2, eps_rel=1e-2):
-    """
-    z, w, w_prev, y: (T+1, m)
-    Returns infinity-norm residuals and thresholds.
-    """
-    # Residuals
-    r = z - w                  # primal residual
-    s = rho * (w - w_prev)     # dual residual (A = I)
+    r = z - w
+    s = rho * (w - w_prev)
 
-    # Infinity norms over all time/constraints
     r_norm = jnp.linalg.norm(r.reshape(-1), ord=jnp.inf)
     s_norm = jnp.linalg.norm(s.reshape(-1), ord=jnp.inf)
 
-    # Infinity norms of variables
     z_norm = jnp.linalg.norm(z.reshape(-1), ord=jnp.inf)
     w_norm = jnp.linalg.norm(w.reshape(-1), ord=jnp.inf)
     y_norm = jnp.linalg.norm(y.reshape(-1), ord=jnp.inf)
 
-    # Stopping thresholds (∞-norm version)
     eps_pri = eps_abs + eps_rel * jnp.maximum(z_norm, w_norm)
     eps_dual = eps_abs + eps_rel * (rho * y_norm)
 
     return r_norm, s_norm, eps_pri, eps_dual
-
 
 def adaptive_rho_update(rp_norm, rd_norm, rho,
                         clip_min=0.2, clip_max=5,
@@ -438,12 +354,8 @@ def generate_leaf(tilde_Q, tilde_R, tilde_M, A, B, reg=1e-8):
 
     def one(t):
         Rt = make_R(t)
-
-        # BRinv[t] = B[t] @ inv(Rt)
-        BR = solve_right(Rt, B[t])            # (n, nu)
-
-        # MRinv[t] = tilde_M[t] @ inv(Rt)
-        MR = solve_right(Rt, tilde_M[t])      # (n, nu)
+        BR = solve_right(Rt, B[t])
+        MR = solve_right(Rt, tilde_M[t])
 
         return BR, MR
 
@@ -451,21 +363,18 @@ def generate_leaf(tilde_Q, tilde_R, tilde_M, A, B, reg=1e-8):
 
     elems = jnp.concatenate(
         [
-            # The A matrices.
             jnp.concatenate(
                 [
                     A - vmap(lambda t: BRinv[t] @ tilde_M[t].T)(jnp.arange(T)),
                     jnp.zeros([1, n, n]),
                 ]
             ),
-            # The C matrices.
             jnp.concatenate(
                 [
                     vmap(lambda t: BRinv[t] @ B[t].T)(jnp.arange(T)),
                     jnp.zeros([1, n, n]),
                 ]
             ),
-            # The P matrices (J, in the notation of https://ieeexplore.ieee.org/document/9697418).
             tilde_Q
             - jnp.concatenate(
                 [
@@ -480,15 +389,11 @@ def generate_leaf(tilde_Q, tilde_R, tilde_M, A, B, reg=1e-8):
     return elems, BRinv, MRinv
 
 def generate_leaf_bp(c, BRinv, MRinv, tilde_r, tilde_q, T, n):
-    # c: (T, n)   where this is c[1:] in your caller
-    # tilde_q: (T+1, n)
-    # tilde_r: (T+1, nu) but only first T matter here
+    c_stage = c - vmap(lambda t: BRinv[t] @ tilde_r[t])(jnp.arange(T))
+    c0 = jnp.concatenate([c_stage, jnp.zeros((1, n), dtype=c.dtype)], axis=0)
 
-    c_stage = c - vmap(lambda t: BRinv[t] @ tilde_r[t])(jnp.arange(T))  # (T, n)
-    c0 = jnp.concatenate([c_stage, jnp.zeros((1, n), dtype=c.dtype)], axis=0)  # (T+1, n)
-
-    p_stage = vmap(lambda t: MRinv[t] @ tilde_r[t])(jnp.arange(T))  # (T, n)
-    p0 = tilde_q - jnp.concatenate([p_stage, jnp.zeros((1, n), dtype=tilde_q.dtype)], axis=0)  # (T+1, n)
+    p_stage = vmap(lambda t: MRinv[t] @ tilde_r[t])(jnp.arange(T))
+    p0 = tilde_q - jnp.concatenate([p_stage, jnp.zeros((1, n), dtype=tilde_q.dtype)], axis=0)
 
     return c0, p0
 
@@ -502,7 +407,7 @@ def get_k(tilde_R, tilde_r, B, P, p, b):
     return vmap(one)(jnp.arange(T))
 
 def get_K(tilde_R, tilde_M, A, B, P):
-    T = B.shape[0]  # NOT tilde_R.shape[0]
+    T = B.shape[0]
     def one(t):
         BtP = B[t].T @ P[t + 1]
         H  = BtP @ A[t] + tilde_M[t].T
@@ -511,7 +416,6 @@ def get_K(tilde_R, tilde_M, A, B, P):
     return vmap(one)(jnp.arange(T))
 
 def constrained_solve(cfg: ADMMConfig, Q, q, R, r, M, A, B, c, C, D, f, w, y, rho):
-    # --- one ADMM iteration ---
     rho_max = cfg.rho_max
     def one_iter(carry):
         (it, tilde_Q, tilde_q, tilde_R, tilde_r, tilde_M, 
@@ -527,9 +431,8 @@ def constrained_solve(cfg: ADMMConfig, Q, q, R, r, M, A, B, c, C, D, f, w, y, rh
         k = get_k(tilde_R, tilde_r, B, P, p, c[1:])
 
         x_bar, u_stage = rollout_gpu(K, k, c[0], A, B, c[1:])
-        u_bar = jnp.pad(u_stage, ((0, 1), (0, 0)))  # (T+1, nu)
+        u_bar = jnp.pad(u_stage, ((0, 1), (0, 0)))
 
-        # z = Cx + Du
         z_bar = (
             jnp.einsum('tmi,ti->tm', C, x_bar) +
             jnp.einsum('tmi,ti->tm', D, u_bar)
@@ -542,7 +445,6 @@ def constrained_solve(cfg: ADMMConfig, Q, q, R, r, M, A, B, c, C, D, f, w, y, rh
 
 
         # -------- Termination + Rho/Cache Update -------- 
-        # Residual norms and tolerances
         rp_norm, rd_norm, eps_pri, eps_dual = admm_residuals(
             z_bar, w_new, w_prev, y_new, rho,
             eps_abs=cfg.eps_abs, eps_rel=cfg.eps_rel
@@ -550,7 +452,6 @@ def constrained_solve(cfg: ADMMConfig, Q, q, R, r, M, A, B, c, C, D, f, w, y, rh
 
         # Convergence check
         converged = jnp.logical_and(rp_norm <= eps_pri, rd_norm <= eps_dual)
-        # Adaptive rho (gated)
         do_rho_update = (it % cfg.rho_update_frequency) == 0
 
         def update_fn(_):
@@ -567,8 +468,7 @@ def constrained_solve(cfg: ADMMConfig, Q, q, R, r, M, A, B, c, C, D, f, w, y, rh
             tilde_Q, tilde_q, tilde_R, tilde_r, tilde_M = admm_augment_xu(
                 Q, q, R, r, M, C, D, w_new, y_new, rho_new
             )
-            Tp1 = Q.shape[0]   # = T+1
-            T   = Tp1 - 1
+            Tp1 = Q.shape[0]
             n   = Q.shape[1]
 
             elems_acp, BRinv, MRinv = generate_leaf(tilde_Q, tilde_R, tilde_M, A, B)
@@ -602,7 +502,6 @@ def constrained_solve(cfg: ADMMConfig, Q, q, R, r, M, A, B, c, C, D, f, w, y, rh
     nx = Q.shape[-1]
     nu = R.shape[-1]
     f = f - cfg.eps_abs
-    # Pad terminal for consistency with x_{T} term
     R = jnp.concatenate([R, jnp.zeros((1, nu, nu), dtype=R.dtype)], axis=0)
     r = jnp.concatenate([r, jnp.zeros((1, nu), dtype=r.dtype)], axis=0)
     M = jnp.concatenate([M, jnp.zeros((1, nx, nu), dtype=M.dtype)], axis=0)
@@ -620,16 +519,16 @@ def constrained_solve(cfg: ADMMConfig, Q, q, R, r, M, A, B, c, C, D, f, w, y, rh
     P = out_acp[:, -n:, :]
     K = get_K(tilde_R, tilde_M, A, B, P)
     init = (
-        jnp.array(1, dtype=jnp.int32),  # it
+        jnp.array(1, dtype=jnp.int32),
         tilde_Q, tilde_q, tilde_R, tilde_r, tilde_M,
         init_x, init_u, init_y, init_w,                          
-        jnp.array(rho0, dtype=Q.dtype),  # rho
+        jnp.array(rho0, dtype=Q.dtype),
         cache, BRinv, MRinv, P, p_init, K,
-        jnp.array(jnp.inf, dtype=Q.dtype),  # rp_norm
-        jnp.array(jnp.inf, dtype=Q.dtype),  # rd_norm
-        jnp.array(jnp.inf, dtype=Q.dtype),  # eps_pri
-        jnp.array(jnp.inf, dtype=Q.dtype),  # eps_dual
-        jnp.array(False)                    # converged
+        jnp.array(jnp.inf, dtype=Q.dtype),
+        jnp.array(jnp.inf, dtype=Q.dtype),
+        jnp.array(jnp.inf, dtype=Q.dtype),
+        jnp.array(jnp.inf, dtype=Q.dtype),
+        jnp.array(False)
     )
 
     out = jax.lax.while_loop(cond_fun, one_iter, init)
