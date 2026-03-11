@@ -265,7 +265,7 @@ def main():
     n_obs = obstacles.shape[0]
     nc = 2 * nu + 2 * n + n_obs
 
-    E_mag = 0.025
+    E_mag = 0.03
     alpha_sim = E_mag * dt
     disturbance = make_constant_disturbance(n=n, alpha=alpha_sim)
 
@@ -287,7 +287,7 @@ def main():
         eps_rel=0,
         rho_max=1e5,
         max_iterations=1000,
-        rho_update_frequency=25,
+        rho_update_frequency=10,
     )
 
     sls_cfg = SLSConfig(
