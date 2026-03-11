@@ -1,0 +1,10 @@
+pycddlib
+jax[cuda12]==0.8.1
+mujoco
+mujoco-mjx
+gym-quadruped
+trajax @ git+https://github.com/google/trajax
+numpy
+scipy
+matplotlib
+primal_dual_ilqr @ git+https://github.com/iit-DLSLab/primal_dual_ilqr.git@273d78d
