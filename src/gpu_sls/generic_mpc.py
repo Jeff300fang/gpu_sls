@@ -8,7 +8,7 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 
-import gpu_sls.sqp
+import gpu_sls.gpu_sqp
 
 @dataclass
 class MPCConfig:
@@ -58,7 +58,7 @@ class GenericMPC:
         self.disturbance = disturbance
 
         work = partial(
-            gpu_sls.sqp.sqp,
+            gpu_sls.gpu_sqp.sqp,
             self.sls_config, self.sqp_config, self.admm_config,
             cost, dynamics,
             None,

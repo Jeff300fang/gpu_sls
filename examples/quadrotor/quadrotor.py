@@ -12,7 +12,7 @@ import numpy as np
 
 from gpu_sls.gpu_admm import ADMMConfig
 from gpu_sls.gpu_sls import SLSConfig
-from gpu_sls.sqp import SQPConfig
+from gpu_sls.gpu_sqp import SQPConfig
 from gpu_sls.generic_mpc import GenericMPC, MPCConfig
 from gpu_sls.utils.constraint_utils import combine_constraints, make_control_box_constraints, make_state_box_constraints, make_constant_disturbance
 from gpu_sls.utils.sls_visual import get_trajectory_tubes
