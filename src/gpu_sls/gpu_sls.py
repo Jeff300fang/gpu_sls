@@ -345,7 +345,8 @@ def sls_solve_gpu(cfg, Q: jnp.ndarray, q: jnp.ndarray,
             Phi_x, Phi_u = get_controller(Q_bar, R_bar, A, B, C_box, D_box, E, eta_stage, eta_f)
             beta = get_betas(C_box, D_box, Phi_x, Phi_u)
             h_ct = get_constraint_tightenings(beta)
-        tightened_constraints = f[:, :-num_obstacles] - h_ct
+        num_regular_constraints = f.shape[1] - num_obstacles
+        tightened_constraints = f[:, :num_regular_constraints] - h_ct
         tightened_constraints_all = add_obstacle_tightenings(obstacles, primal_pos, h_ct, tightened_constraints)
         warm_flag = jnp.array(bool(sls_config.warm_start))
 
@@ -357,10 +358,10 @@ def sls_solve_gpu(cfg, Q: jnp.ndarray, q: jnp.ndarray,
         )
 
         metric = primal_convergence_metric(x_curr, u_curr, x_prev, u_prev)
-        mu_nominal = mu[: , :-num_obstacles]
+        mu_nominal = mu[: , :num_regular_constraints]
         eta_stage, eta_f = get_etas(mu_nominal, beta)
-        C_box = C[:, :nc - num_obstacles, :]
-        D_box = D[:, :nc - num_obstacles, :]
+        C_box = C[:, :num_regular_constraints, :]
+        D_box = D[:, :num_regular_constraints, :]
         Phi_x, Phi_u = get_controller(Q_bar, R_bar, A, B, C_box, D_box, E, eta_stage, eta_f)
         beta = get_betas(C_box, D_box, Phi_x, Phi_u)
         h_ct = get_constraint_tightenings(beta)

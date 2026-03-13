@@ -287,7 +287,7 @@ def main():
         eps_rel=0,
         rho_max=1e5,
         max_iterations=1000,
-        rho_update_frequency=10,
+        rho_update_frequency=25,
     )
 
     sls_cfg = SLSConfig(

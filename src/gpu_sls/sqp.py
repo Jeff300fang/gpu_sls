@@ -147,11 +147,10 @@ def compute_search_direction(
         )
         return dX, dU, dV, w1, y1, rho1, backoffs, Phi_x, Phi_u, betaN, muN
 
-    use_nominal = jnp.logical_and(
+    use_nominal = jnp.logical_or(
         jnp.logical_not(sls_config.enable_fastsls),
-        sqp_iteration < sls_config.max_initial_sqp_iterations
+        jnp.logical_and(sls_config.enable_fastsls, sqp_iteration < sls_config.max_initial_sqp_iterations)
     )
-
     dX, dU, dV, w1, y1, rho1, backoffs, Phi_x, Phi_u, betaN, muN = lax.cond(
         use_nominal, run_nominal, run_sls, operand=None
     )
@@ -194,7 +193,7 @@ def sqp(
             w0   = lax.select(warm_flag, w, jnp.zeros_like(w))
             y0   = lax.select(warm_flag, y, jnp.zeros_like(y))
             # TODO: Make the defualt rho a parameter
-            rho0 = lax.select(warm_flag, rho, jnp.asarray(10.0, dtype=rho.dtype))
+            rho0 = lax.select(warm_flag, rho, jnp.asarray(admm_config.initial_rho, dtype=rho.dtype))
             h_ct_ws = backoffs
             dX, dU, dV, q, r, w1, y1, rho1, backoffs1, Phi_x1, Phi_u1, betaN, muN = compute_search_direction(
                 sls_config, admm_config,
@@ -254,8 +253,8 @@ def sqp(
             w_next = lax.select(converged1, w, w1)
             y_next = lax.select(converged1, y, y1)
             rho_next = lax.select(converged1, rho, rho1)
-            # rho_next = jnp.minimum(rho, 10.0)
-            # y_next = rho / rho_next * y_next
+            rho_next = jnp.minimum(rho, admm_config.initial_rho)
+            y_next = rho / rho_next * y_next
             backoffs_next = lax.select(converged1, backoffs, backoffs1)
             Phi_x_next = lax.select(converged1, Phi_x, Phi_x1)
             Phi_u_next = lax.select(converged1, Phi_u, Phi_u1)
@@ -269,6 +268,6 @@ def sqp(
     backoffs0 = h_ct_ws
     carry0 = (0, X_in, U_in, V_in, w, y, rho, jnp.array(False), backoffs0, Phi_x_ws, Phi_u_ws, beta_ws, mu_ws)
     total_iterations, X_out, U_out, V_out, w_out, y_out, rho_out, converged, backoffs, Phi_x, Phi_u, betaN, muN = lax.fori_loop(
-        0, sqp_config.max_sqp_iterations, body, carry0
+        0, sqp_config.max_sqp_iterations + sls_config.max_initial_sqp_iterations, body, carry0
     )
     return X_out, U_out, V_out, w_out, y_out, rho_out, backoffs, Phi_x, Phi_u, betaN, muN

@@ -50,7 +50,7 @@ class GenericMPC:
         self.w = jnp.zeros((config.N + 1, num_constraints))
         self.y = jnp.zeros((config.N + 1, num_constraints))
         # TODO: Make this a parameter
-        self.rho = jnp.asarray(0.1, dtype=self.w.dtype)
+        self.rho = jnp.asarray(self.admm_config.initial_rho, dtype=self.w.dtype)
 
         self.dynamics = dynamics
         self.constraints = constraints
@@ -162,13 +162,19 @@ class GenericMPC:
         )
 
         rho = jnp.asarray(rho, dtype=self.rho.dtype)
-        rho = jnp.array(10.0, dtype=self.rho.dtype)
 
         # Only rescale y if the solve was valid
         self.y = jax.lax.cond(
             invalid,
             lambda _: self.y,
             lambda _: rho / self.rho * self.y,
+            operand=None,
+        )
+
+        self.rho = jax.lax.cond(
+            invalid,
+            lambda _: jnp.asarray(self.admm_config.initial_rho, dtype=self.rho.dtype),
+            lambda _: rho,
             operand=None,
         )
 

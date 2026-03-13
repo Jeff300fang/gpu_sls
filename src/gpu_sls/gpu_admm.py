@@ -29,9 +29,10 @@ class ADMMConfig:
     eps_abs: float = 1e-2
     eps_rel: float = 1e-2
     rho_max: int = 1e5
+    initial_rho: int = 1.0
 
     def tree_flatten(self):
-        children = (self.rho_update_frequency, self.max_iterations, self.eps_abs, self.eps_rel, self.rho_max)
+        children = (self.rho_update_frequency, self.max_iterations, self.eps_abs, self.eps_rel, self.rho_max, self.initial_rho)
         return children, None
 
     @classmethod
@@ -297,7 +298,7 @@ def adaptive_rho_update(rp_norm, rd_norm, rho,
     rd_eff = jnp.maximum(rd_norm, 1e-10)
     # scale = jnp.sqrt(rp_norm / rd_eff)
     scale = jnp.sqrt(rp_norm / rd_eff)
-    # scale = (rp_norm / rd_eff) ** 0.5
+    # scale = rp_norm / rd_eff
     scale = jnp.clip(scale, 0.5, 2.0)
     rho_new = jnp.clip(rho * scale, rho_min, rho_max)
     updated = rho_new != rho
