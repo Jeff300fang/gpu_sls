@@ -295,6 +295,19 @@ def add_obstacle_tightenings(
     tightened = dist - radii[None, :] - over
     return jnp.concatenate([tightened_constraints, tightened], axis=1)
 
+def get_trajectory_tubes(Phi_x):
+    per_state = jnp.linalg.norm(Phi_x, ord=2, axis=-1).sum(axis=1)  # (Tp1, nx)
+    return per_state.max(axis=-1) 
+
+def augment_E(Phi_x, E):
+    alpha1 = 0.99
+    alpha2 = 0.01
+    tau = get_trajectory_tubes(Phi_x)  # (Tp1,) scalars
+    nx = Phi_x.shape[2]
+    E_lin = jnp.broadcast_to(jnp.diag(jnp.array([0.0, 0.0, 0.0, 0.14580093324184418 / 4 / (6 ** 0.5), 0.12268725782632828 / 4 / (6 ** 0.5), 0.0])), E.shape)
+    E_aug = (1/alpha1) * E + (1/alpha2) * jnp.sqrt(nx) * (tau**2)[:, None, None] * E_lin
+    return E_aug
+
 @partial(jit, static_argnums=(0, 15))
 def sls_solve_gpu(cfg, Q: jnp.ndarray, q: jnp.ndarray,
                        R: jnp.ndarray, r: jnp.ndarray,
@@ -325,14 +338,14 @@ def sls_solve_gpu(cfg, Q: jnp.ndarray, q: jnp.ndarray,
     tol = jnp.array(sls_config.sls_primal_tol, dtype=Q.dtype)
 
     h_ct0 = h_ct_ws
-    carry0 = (i0, beta_ws, x0, u0, v0, w, y, rho, converged0, converged0, h_ct0, Phi_x_ws, Phi_u_ws, mu_ws)
+    carry0 = (i0, beta_ws, x0, u0, v0, w, y, rho, converged0, converged0, h_ct0, Phi_x_ws, Phi_u_ws, mu_ws, E)
 
     def cond_fn(carry):
-        i, _, _, _, _, _, _, _, converged, _, _, _, _, _ = carry
+        i, _, _, _, _, _, _, _, converged, _, _, _, _, _, _ = carry
         return jnp.logical_and(i < max_iter, jnp.logical_not(converged))
 
     def body_fn(carry):
-        i, beta, x_curr, u_curr, v_curr, w, y, rho, converged, _, h_ct, _, _, mu = carry
+        i, beta, x_curr, u_curr, v_curr, w, y, rho, converged, _, h_ct, _, _, mu, _ = carry
 
         prev_rho = rho
         x_prev = x_curr
@@ -352,7 +365,7 @@ def sls_solve_gpu(cfg, Q: jnp.ndarray, q: jnp.ndarray,
 
         w   = lax.select(warm_flag, w, jnp.zeros_like(w))
         y   = lax.select(warm_flag, y, jnp.zeros_like(y))
-        rho = lax.select(warm_flag, rho, jnp.array(30.0, dtype=rho.dtype))
+        rho = lax.select(warm_flag, rho, jnp.array(1.0, dtype=rho.dtype))
         x_curr, u_curr, v_curr, w, y, rho, mu, converged_admm = constrained_solve(
             cfg, Q, q, R, r, M, A, B, c, C, D, tightened_constraints_all, w, y, rho
         )
@@ -362,7 +375,9 @@ def sls_solve_gpu(cfg, Q: jnp.ndarray, q: jnp.ndarray,
         eta_stage, eta_f = get_etas(mu_nominal, beta)
         C_box = C[:, :num_regular_constraints, :]
         D_box = D[:, :num_regular_constraints, :]
-        Phi_x, Phi_u = get_controller(Q_bar, R_bar, A, B, C_box, D_box, E, eta_stage, eta_f)
+        E_aug = augment_E(Phi_x_ws, E)
+        # E_aug = E
+        Phi_x, Phi_u = get_controller(Q_bar, R_bar, A, B, C_box, D_box, E_aug, eta_stage, eta_f)
         beta = get_betas(C_box, D_box, Phi_x, Phi_u)
         h_ct = get_constraint_tightenings(beta)
         rho = jnp.maximum(jnp.minimum(rho, 1e4) * 0.9, 0.1)
@@ -374,9 +389,9 @@ def sls_solve_gpu(cfg, Q: jnp.ndarray, q: jnp.ndarray,
         converged = jnp.logical_or(converged, converged_now)
 
         return (i + jnp.array(1, dtype=jnp.int32),
-                beta, x_curr, u_curr, v_curr, w, y, rho, converged, converged_admm, h_ct, Phi_x, Phi_u, mu)
+                beta, x_curr, u_curr, v_curr, w, y, rho, converged, converged_admm, h_ct, Phi_x, Phi_u, mu, E_aug)
 
     carryN = jax.lax.while_loop(cond_fn, body_fn, carry0)
 
-    _, betaN, xN, uN, vN, wN, yN, rhoN, convergedN, converged_admm, h_ct, Phi_x, Phi_u, muN = carryN
-    return xN, uN, vN, wN, yN, rhoN, convergedN, converged_admm, h_ct, Phi_x, Phi_u, betaN, muN
+    _, betaN, xN, uN, vN, wN, yN, rhoN, convergedN, converged_admm, h_ct, Phi_x, Phi_u, muN, EN = carryN
+    return xN, uN, vN, wN, yN, rhoN, convergedN, converged_admm, h_ct, Phi_x, Phi_u, betaN, muN, EN

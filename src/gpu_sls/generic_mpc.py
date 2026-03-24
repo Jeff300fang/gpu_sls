@@ -67,7 +67,7 @@ class GenericMPC:
         self._solve = jax.jit(work)
 
     def run(self, x0: jnp.ndarray, reference: jnp.ndarray, parameter: Any):
-        X, U, V, w, y, rho, backoffs, Phi_x, Phi_u, betaN, muN = self._solve(
+        X, U, V, w, y, rho, backoffs, Phi_x, Phi_u, betaN, muN, EN = self._solve(
             reference,
             parameter,
             self.config.W,
@@ -192,4 +192,4 @@ class GenericMPC:
             operand=None,
         )
 
-        return U[0], X, U, V, backoffs, Phi_x, Phi_u
+        return U[0], X, U, V, backoffs, Phi_x, Phi_u, EN

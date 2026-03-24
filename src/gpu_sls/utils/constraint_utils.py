@@ -41,6 +41,6 @@ def make_constant_disturbance(
 ) -> Callable[[jnp.ndarray], jnp.ndarray]:
     def disturbance(X_prefix: jnp.ndarray) -> jnp.ndarray:
         T = X_prefix.shape[0]
-        E0 = alpha * jnp.eye(n, n, dtype=X_prefix.dtype)
+        E0 = jnp.diag(jnp.array([0.0, 0.0, 0.0, alpha, alpha, 0.0]))
         return jnp.broadcast_to(E0, (T, n, n))
     return disturbance
