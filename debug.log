@@ -1,0 +1,130 @@
+Platform 'mps' is experimental and not all JAX functionality may be correctly supported!
+JAX backend: mps
+JAX devices: [MpsDevice(id=0)]
+╭────── viser (listening *:8081) ───────╮
+│             ╷                         │
+│   HTTP      │ http://localhost:8081   │
+│   Websocket │ ws://localhost:8081     │
+│             ╵                         │
+╰───────────────────────────────────────╯
+MPC step took 2508.38 msMPC step took 772.58 msMPC step took 890.34 msMPC step took 877.93 msMPC step took 934.49 msMPC step took 993.99 msMPC step took 1021.14 msMPC step took 1032.04 msMPC step took 1076.74 msMPC step took 973.51 msMPC step took 941.28 msMPC step took 898.97 msMPC step took 821.87 msMPC step took 763.17 msMPC step took 752.57 msMPC step took 856.82 msMPC step took 875.11 msMPC step took 952.22 msMPC step took 949.26 msMPC step took 769.94 msMPC step took 1017.56 msMPC step took 817.66 msMPC step took 864.56 msMPC step took 873.76 msMPC step took 980.31 msMPC step took 963.07 msMPC step took 851.37 msMPC step took 937.21 msMPC step took 894.11 msMPC step took 910.94 ms(viser) Connection opened (0, 1 total), 100 persistent messages
+MPC step took 1000.47 msMPC step took 961.53 msMPC step took 947.85 msMPC step took 972.05 msMPC step took 891.14 msMPC step took 1045.59 msMPC step took 747.33 msMPC step took 939.65 ms(viser) Connection opened (1, 2 total), 100 persistent messages
+MPC step took 943.90 msMPC step took 928.19 ms(viser) Connection closed (1, 1 total)
+MPC step took 943.29 msMPC step took 888.14 msMPC step took 820.89 msMPC step took 887.22 msMPC step took 741.79 msMPC step took 919.84 msMPC step took 871.05 msMPC step took 818.45 msMPC step took 718.36 msMPC step took 745.98 msMPC step took 824.99 msMPC step took 808.29 msMPC step took 797.84 msMPC step took 811.48 msMPC step took 822.92 msMPC step took 801.20 msMPC step took 813.04 msMPC step took 839.75 msMPC step took 827.17 msMPC step took 819.33 msMPC step took 716.43 msMPC step took 848.31 msMPC step took 810.75 msMPC step took 825.37 msMPC step took 803.43 msMPC step took 818.88 msMPC step took 809.72 msMPC step took 806.33 msMPC step took 790.27 msMPC step took 811.84 msMPC step took 834.14 msMPC step took 819.02 msMPC step took 858.43 msMPC step took 956.55 msMPC step took 961.97 msMPC step took 878.25 msMPC step took 902.23 msMPC step took 884.04 msMPC step took 905.79 msMPC step took 840.38 msMPC step took 835.78 msMPC step took 864.41 msMPC step took 922.26 msMPC step took 949.14 msMPC step took 823.98 msMPC step took 860.80 msMPC step took 866.77 msMPC step took 867.18 msMPC step took 772.73 msMPC step took 959.40 msMPC step took 980.56 msMPC step took 969.81 msMPC step took 920.95 msMPC step took 865.33 msMPC step took 853.42 msMPC step took 844.05 msMPC step took 725.75 msMPC step took 867.13 msMPC step took 939.55 msTraceback (most recent call last):
+  File "/Users/jefffang/deformables/gpu_sls/examples/rope/rope.py", line 256, in <module>
+    main()
+    ~~~~^^
+  File "/Users/jefffang/deformables/gpu_sls/examples/rope/rope.py", line 233, in main
+    u0, X_pred, U_pred, V_pred, backoffs, Phi_x, Phi_u = controller.run(
+                                                         ~~~~~~~~~~~~~~^
+        x0=state,
+        ^^^^^^^^^
+        reference=reference,
+        ^^^^^^^^^^^^^^^^^^^^
+        parameter=None,
+        ^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/jefffang/deformables/gpu_sls/src/gpu_sls/generic_mpc.py", line 106, in run
+    self.U0 = jax.lax.cond(
+              ~~~~~~~~~~~~^
+        invalid,
+        ^^^^^^^^
+    ...<2 lines>...
+        operand=None,
+        ^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/jefffang/miniconda3-arm64/envs/gpu_sls_apple/lib/python3.13/site-packages/jax/_src/traceback_util.py", line 196, in reraise_with_filtered_traceback
+    return fun(*args, **kwargs)
+  File "/Users/jefffang/miniconda3-arm64/envs/gpu_sls_apple/lib/python3.13/site-packages/jax/_src/lax/control_flow/conditionals.py", line 316, in cond
+    out = cond_p.bind(index, *consts, *args, branches=(false_jaxpr, true_jaxpr))
+  File "/Users/jefffang/miniconda3-arm64/envs/gpu_sls_apple/lib/python3.13/site-packages/jax/_src/core.py", line 660, in bind
+    return self.bind_with_trace(prev_trace, args, avals, params)
+           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jefffang/miniconda3-arm64/envs/gpu_sls_apple/lib/python3.13/site-packages/jax/_src/core.py", line 668, in bind_with_trace
+    return trace.process_primitive(self, args, params)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jefffang/miniconda3-arm64/envs/gpu_sls_apple/lib/python3.13/site-packages/jax/_src/core.py", line 1220, in process_primitive
+    return primitive.impl(*args, **params)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/jefffang/miniconda3-arm64/envs/gpu_sls_apple/lib/python3.13/site-packages/jax/_src/dispatch.py", line 90, in apply_primitive
+    outs = fun(*args)
+  File "/Users/jefffang/miniconda3-arm64/envs/gpu_sls_apple/lib/python3.13/site-packages/jax/_src/traceback_util.py", line 196, in reraise_with_filtered_traceback
+    return fun(*args, **kwargs)
+  File "/Users/jefffang/miniconda3-arm64/envs/gpu_sls_apple/lib/python3.13/site-packages/jax/_src/pjit.py", line 255, in cache_miss
+    executable, pgle_profiler, const_args) = _run_python_pjit(
+                                             ~~~~~~~~~~~~~~~~^
+        p, args_flat, fun, args, kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jefffang/miniconda3-arm64/envs/gpu_sls_apple/lib/python3.13/site-packages/jax/_src/pjit.py", line 140, in _run_python_pjit
+    out_flat, compiled, profiler, const_args = _pjit_call_impl_python(
+                                               ~~~~~~~~~~~~~~~~~~~~~~^
+        *args_flat, **p.params)
+        ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jefffang/miniconda3-arm64/envs/gpu_sls_apple/lib/python3.13/site-packages/jax/_src/pjit.py", line 1157, in _pjit_call_impl_python
+    computation = _resolve_and_lower(
+        arg_types, jaxpr=jaxpr, in_shardings=in_shardings,
+    ...<6 lines>...
+        compiler_options_kvs=compiler_options_kvs,
+    )
+  File "/Users/jefffang/miniconda3-arm64/envs/gpu_sls_apple/lib/python3.13/site-packages/jax/_src/pjit.py", line 1083, in _resolve_and_lower
+    return _pjit_lower(
+        jaxpr, in_shardings, out_shardings, in_layouts, out_layouts,
+    ...<2 lines>...
+        lowering_parameters=lowering_parameters,
+        pgle_profiler=pgle_profiler)
+  File "/Users/jefffang/miniconda3-arm64/envs/gpu_sls_apple/lib/python3.13/site-packages/jax/_src/pjit.py", line 1263, in _pjit_lower
+    return pxla.lower_sharding_computation(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        jaxpr, 'jit', name, in_shardings, out_shardings,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<4 lines>...
+        lowering_parameters=lowering_parameters,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        pgle_profiler=pgle_profiler)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jefffang/miniconda3-arm64/envs/gpu_sls_apple/lib/python3.13/site-packages/jax/_src/profiler.py", line 384, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/jefffang/miniconda3-arm64/envs/gpu_sls_apple/lib/python3.13/site-packages/jax/_src/interpreters/pxla.py", line 1127, in lower_sharding_computation
+    tuple_args, shape_poly_state) = _cached_lowering_to_hlo(
+                                    ~~~~~~~~~~~~~~~~~~~~~~~^
+        closed_jaxpr, module_name, backend,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+        lowering_parameters=lowering_parameters,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        abstract_mesh=abstract_mesh)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jefffang/miniconda3-arm64/envs/gpu_sls_apple/lib/python3.13/site-packages/jax/_src/interpreters/pxla.py", line 732, in _cached_lowering_to_hlo
+    lowering_result = mlir.lower_jaxpr_to_module(
+        module_name,
+    ...<18 lines>...
+        propagated_out_mem_kinds=propagated_out_mem_kinds,
+        lowering_parameters=lowering_parameters)
+  File "/Users/jefffang/miniconda3-arm64/envs/gpu_sls_apple/lib/python3.13/site-packages/jax/_src/interpreters/mlir.py", line 1348, in lower_jaxpr_to_module
+    ctx = ModuleContext(backend=backend,
+                        platforms=platforms, axis_context=axis_context,
+    ...<4 lines>...
+                        shape_poly_state=ShapePolyLoweringState(dim_vars, platforms),
+                        all_default_mem_kind=all_default_mem_kind)
+  File "/Users/jefffang/miniconda3-arm64/envs/gpu_sls_apple/lib/python3.13/site-packages/jax/_src/interpreters/mlir.py", line 804, in __init__
+    self.context = context or make_ir_context()
+                              ~~~~~~~~~~~~~~~^^
+  File "/Users/jefffang/miniconda3-arm64/envs/gpu_sls_apple/lib/python3.13/site-packages/jax/_src/interpreters/mlir.py", line 627, in make_ir_context
+    context = JaxIrContext()
+  File "/Users/jefffang/miniconda3-arm64/envs/gpu_sls_apple/lib/python3.13/site-packages/jax/_src/interpreters/mlir.py", line 623, in __init__
+    super(ir.Context, self).__init__(*args, **kwargs)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+(viser) Connection closed (0, 0 total)
+(viser) Server stopped
+Exception ignored in atexit callback <function clean_up at 0x10d0fb6a0>:
+Traceback (most recent call last):
+  File "/Users/jefffang/miniconda3-arm64/envs/gpu_sls_apple/lib/python3.13/site-packages/jax/_src/api.py", line 2627, in clean_up
+    clear_backends()
+  File "/Users/jefffang/miniconda3-arm64/envs/gpu_sls_apple/lib/python3.13/site-packages/jax/_src/api.py", line 2619, in clear_backends
+    util.clear_all_caches()
+  File "/Users/jefffang/miniconda3-arm64/envs/gpu_sls_apple/lib/python3.13/site-packages/jax/_src/util.py", line 307, in clear_all_caches
+    cache.cache_clear()
+KeyboardInterrupt: 

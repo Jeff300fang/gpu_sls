@@ -342,7 +342,7 @@ def main():
     for i in range(N_ROLLOUTS):
         disturbance_history = [jnp.zeros((n,), dtype=jnp.float64)]
         x = x0
-        jax.debug.print(f"Rolling out iteration {i}")
+        # jax.debug.print(f"Rolling out iteration {i}")
         for k in range(T_steps):
             if bool(reached_goal_xy(x, x_goal, GOAL_TOL)):
                 stop_steps[i] = k
