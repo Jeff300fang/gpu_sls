@@ -536,9 +536,9 @@ def constrained_solve(cfg: ADMMConfig, Q, q, R, r, M, A, B, c, C, D, f, w, y, rh
 
     it, _, _, _, _, _, x_bar, u_bar, y_bar, w_bar, rho_final, _, _, _, P_final, p_final, K, rp_norm, rd_norm, eps_pri, eps_dual, converged = out
     v = dual_lqr(x_bar, P_final, p_final)
-    jax.debug.print(
-        "ADMM done: Total Iterations={} converged={} rho={:.3e} rp={:.3e} (<= {:.3e}) rd={:.3e} (<= {:.3e}) Rho0 {:.3e}",
-        it - 1, converged, rho_final, rp_norm, eps_pri, rd_norm, eps_dual, rho0
-    )
+    # jax.debug.print(
+    #     "ADMM done: Total Iterations={} converged={} rho={:.3e} rp={:.3e} (<= {:.3e}) rd={:.3e} (<= {:.3e}) Rho0 {:.3e}",
+    #     it - 1, converged, rho_final, rp_norm, eps_pri, rd_norm, eps_dual, rho0
+    # )
     mu = rho_final * y_bar
     return x_bar, u_bar[:-1], v, w_bar, y_bar, rho_final, mu, converged
