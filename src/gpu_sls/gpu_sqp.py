@@ -79,6 +79,21 @@ def merit_function_factory(rho_merit):
         return g + jnp.sum(V * c) + 0.5 * rho_merit * jnp.sum(c * c)
     return merit_fn
 
+def check_nan(name, x):
+    bad = ~jnp.isfinite(x)
+    has_bad = jnp.any(bad)
+
+    jax.debug.print(
+        "{name}: has_bad={has_bad}, shape={shape}, min={minv}, max={maxv}",
+        name=name,
+        has_bad=has_bad,
+        shape=x.shape,
+        minv=jnp.nanmin(x),
+        maxv=jnp.nanmax(x),
+    )
+
+    return has_bad
+
 @partial(jit, static_argnums=(0, 1, 2, 3, 4, 5, 6))
 def compute_search_direction(
     sls_config: SLSConfig, admm_config: ADMMConfig,
@@ -110,6 +125,9 @@ def compute_search_direction(
     q, r_pad = linearizer(X, pad(U), jnp.arange(T + 1), pad(V[1:]), V)
     r = r_pad[:-1]
     A_pad, B_pad = dynamics_linearizer(X, pad(U), jnp.arange(T + 1))
+    # check_nan("A_pad", A_pad)
+    # check_nan("B_pad", B_pad)
+
     A = A_pad[:-1]
     B = B_pad[:-1]
 

@@ -66,6 +66,16 @@ class GenericMPC:
         )
         self._solve = jax.jit(work)
 
+    # def run(self, x0: jnp.ndarray, reference: jnp.ndarray, parameter: Any):
+    #     X = jnp.zeros_like(self.X0)
+    #     U = jnp.zeros_like(self.U0)
+    #     V = jnp.zeros_like(self.V0)
+    #     backoffs = jnp.zeros_like(self.h_ct_ws)
+    #     Phi_x = jnp.zeros_like(self.Phi_x_ws)
+    #     Phi_u = jnp.zeros_like(self.Phi_u_ws)
+
+    #     return U[0], X, U, V, backoffs, Phi_x, Phi_u
+
     def run(self, x0: jnp.ndarray, reference: jnp.ndarray, parameter: Any):
         X, U, V, w, y, rho, backoffs, Phi_x, Phi_u, betaN, muN = self._solve(
             reference,
@@ -102,94 +112,78 @@ class GenericMPC:
                 )
             return jnp.concatenate([arr[s:], tail], axis=0)
 
-        # ---- primal warm starts ----
-        self.U0 = jax.lax.cond(
-            invalid,
-            lambda _: jnp.tile(self.config.u_ref, (self.config.N, 1)),
-            lambda _: shift_and_pad(U),
-            operand=None,
-        )
-
-        self.X0 = jax.lax.cond(
-            invalid,
-            lambda _: jnp.tile(x0, (self.config.N + 1, 1)),
-            lambda _: shift_and_pad(X),
-            operand=None,
-        )
-
-        self.V0 = jax.lax.cond(
-            invalid,
-            lambda _: jnp.zeros((self.config.N + 1, self.config.n), dtype=V.dtype),
-            lambda _: shift_and_pad(V),
-            operand=None,
-        )
-
-        # ---- constraint / tube warm starts ----
-        self.h_ct_ws = jax.lax.cond(
-            invalid,
-            lambda _: jnp.zeros_like(self.h_ct_ws),
-            lambda _: shift_and_pad(backoffs),
-            operand=None,
-        )
-
-        self.beta_ws = jax.lax.cond(
-            invalid,
-            lambda _: jnp.ones_like(self.beta_ws) * 1e-10,
-            lambda _: shift_and_pad(betaN),
-            operand=None,
-        )
-
-        self.mu_ws = jax.lax.cond(
-            invalid,
-            lambda _: jnp.zeros_like(self.mu_ws),
-            lambda _: shift_and_pad(muN),
-            operand=None,
-        )
-
-        # ---- ADMM-ish dual warm starts ----
-        self.w = jax.lax.cond(
-            invalid,
-            lambda _: jnp.zeros_like(self.w),
-            lambda _: shift_and_pad(w),
-            operand=None,
-        )
-
-        self.y = jax.lax.cond(
-            invalid,
-            lambda _: jnp.zeros_like(self.y),
-            lambda _: shift_and_pad(y),
-            operand=None,
-        )
-
         rho = jnp.asarray(rho, dtype=self.rho.dtype)
 
-        # Only rescale y if the solve was valid
-        self.y = jax.lax.cond(
+        self.U0 = jnp.where(
             invalid,
-            lambda _: self.y,
-            lambda _: rho / self.rho * self.y,
-            operand=None,
+            jnp.tile(self.config.u_ref, (self.config.N, 1)),
+            shift_and_pad(U),
         )
 
-        self.rho = jax.lax.cond(
+        self.X0 = jnp.where(
             invalid,
-            lambda _: jnp.asarray(self.admm_config.initial_rho, dtype=self.rho.dtype),
-            lambda _: rho,
-            operand=None,
+            jnp.tile(x0, (self.config.N + 1, 1)),
+            shift_and_pad(X),
         )
 
-        self.Phi_x_ws = jax.lax.cond(
+        self.V0 = jnp.where(
             invalid,
-            lambda _: jnp.zeros_like(self.Phi_x_ws),
-            lambda _: Phi_x,
-            operand=None,
+            jnp.zeros_like(self.V0),
+            shift_and_pad(V),
         )
 
-        self.Phi_u_ws = jax.lax.cond(
+        self.h_ct_ws = jnp.where(
             invalid,
-            lambda _: jnp.zeros_like(self.Phi_u_ws),
-            lambda _: Phi_u,
-            operand=None,
+            jnp.zeros_like(self.h_ct_ws),
+            shift_and_pad(backoffs),
+        )
+
+        self.beta_ws = jnp.where(
+            invalid,
+            jnp.ones_like(self.beta_ws) * jnp.asarray(1e-10, dtype=self.beta_ws.dtype),
+            shift_and_pad(betaN),
+        )
+
+        self.mu_ws = jnp.where(
+            invalid,
+            jnp.zeros_like(self.mu_ws),
+            shift_and_pad(muN),
+        )
+
+        self.w = jnp.where(
+            invalid,
+            jnp.zeros_like(self.w),
+            shift_and_pad(w),
+        )
+
+        self.y = jnp.where(
+            invalid,
+            jnp.zeros_like(self.y),
+            shift_and_pad(y),
+        )
+
+        self.y = jnp.where(
+            invalid,
+            self.y,
+            rho / self.rho * self.y,
+        )
+
+        self.rho = jnp.where(
+            invalid,
+            jnp.asarray(self.admm_config.initial_rho, dtype=self.rho.dtype),
+            rho,
+        )
+
+        self.Phi_x_ws = jnp.where(
+            invalid,
+            jnp.zeros_like(self.Phi_x_ws),
+            Phi_x,
+        )
+
+        self.Phi_u_ws = jnp.where(
+            invalid,
+            jnp.zeros_like(self.Phi_u_ws),
+            Phi_u,
         )
 
         return U[0], X, U, V, backoffs, Phi_x, Phi_u
