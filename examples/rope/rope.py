@@ -30,6 +30,7 @@ config.update("jax_enable_x64", False)
 def render_cylinder_obstacle(
     server,
     *,
+    name: str,
     center_xy,
     radius: float,
     z_min: float,
@@ -61,7 +62,7 @@ def render_cylinder_obstacle(
     faces = np.array(faces, dtype=np.int32)
 
     server.scene.add_mesh_simple(
-        name="/obstacles/cylinder",
+        name=name,
         vertices=vertices,
         faces=faces,
         color=(1.0, 0.4, 0.0),
@@ -92,7 +93,7 @@ def make_control_and_cylinder_constraints(
     u_max: jnp.ndarray,
     *,
     num_nodes: int,
-    cylinder_center_xy: jnp.ndarray,
+    cylinder_centers_xy: jnp.ndarray,
     cylinder_radius: float,
     cylinder_z_min: float,
     cylinder_z_max: float,
@@ -100,27 +101,40 @@ def make_control_and_cylinder_constraints(
     def constraints(x: jnp.ndarray, u: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
         control_constraints = jnp.concatenate([u - u_max, u_min - u], axis=0)
 
-        # First 3*num_nodes entries are rope node xyz positions.
         rope_nodes = x[: 3 * num_nodes].reshape((num_nodes, 3))
 
         node_xy = rope_nodes[:, 0:2]
         node_z = rope_nodes[:, 2]
 
-        radial_dist = jnp.linalg.norm(node_xy - cylinder_center_xy[None, :], axis=1)
+        all_constraints = []
 
-        # Constraint convention: values must be <= 0.
-        # Positive means the node is inside the cylinder radius.
-        cylinder_violation = cylinder_radius - radial_dist
+        for center_xy in cylinder_centers_xy:
+            radial_dist = jnp.linalg.norm(
+                node_xy - center_xy[None, :],
+                axis=1,
+            )
 
-        # Only activate obstacle constraint for nodes inside the cylinder height.
-        within_height = (node_z >= cylinder_z_min) & (node_z <= cylinder_z_max)
-        cylinder_constraints = jnp.where(
-            within_height,
-            cylinder_violation,
-            -1.0,
+            cylinder_violation = cylinder_radius - radial_dist
+
+            within_height = (
+                (node_z >= cylinder_z_min)
+                & (node_z <= cylinder_z_max)
+            )
+
+            cylinder_constraints = jnp.where(
+                within_height,
+                cylinder_violation,
+                -1.0,
+            )
+
+            all_constraints.append(cylinder_constraints)
+
+        obstacle_constraints = jnp.concatenate(all_constraints, axis=0)
+
+        return jnp.concatenate(
+            [control_constraints, obstacle_constraints],
+            axis=0,
         )
-
-        return jnp.concatenate([control_constraints, cylinder_constraints], axis=0)
 
     return constraints
 
@@ -281,11 +295,28 @@ def main():
     cylinder_z_min = 0.0
     cylinder_z_max = 0.30
 
+    # Original obstacle
+    cylinder_center_xy = jnp.array([0.05, 0.25], dtype=state.dtype)
+
+    # Second obstacle 0.3m to the left (negative x)
+    cylinder_center_xy_2 = cylinder_center_xy + jnp.array(
+        [-0.22, 0.0],
+        dtype=state.dtype,
+    )
+
+    cylinder_centers_xy = jnp.stack(
+        [
+            cylinder_center_xy,
+            cylinder_center_xy_2,
+        ],
+        axis=0,
+    )
+
     constraints_all = make_control_and_cylinder_constraints(
         u_min,
         u_max,
         num_nodes=num_nodes,
-        cylinder_center_xy=cylinder_center_xy,
+        cylinder_centers_xy=cylinder_centers_xy,
         cylinder_radius=cylinder_radius,
         cylinder_z_min=cylinder_z_min,
         cylinder_z_max=cylinder_z_max,
@@ -299,7 +330,7 @@ def main():
     obstacles = jnp.zeros((0, 3), dtype=state.dtype)
     E_mag = 0.03
     alpha_sim = E_mag * dt
-    nc = 2 * nu + num_nodes
+    nc = 2 * nu + 2 * num_nodes
     disturbance = make_constant_disturbance(n=n, alpha=alpha_sim)
 
     admm_cfg = ADMMConfig(
@@ -348,11 +379,22 @@ def main():
     if server is not None:
         render_cylinder_obstacle(
             server,
+            name="/obstacles/cylinder_0",
             center_xy=cylinder_center_xy,
             radius=0.10,
             z_min=0.0,
             z_max=0.30,
         )
+
+        render_cylinder_obstacle(
+            server,
+            name="/obstacles/cylinder_1",
+            center_xy=cylinder_center_xy_2,
+            radius=0.10,
+            z_min=0.0,
+            z_max=0.30,
+        )
+
         env.visualize(server, state, control0)
 
     for i in range(args.steps):
@@ -367,7 +409,7 @@ def main():
         state = env.step(state, u0)
 
         elapsed = time.time() - start
-        print(f"\rMPC step took {elapsed * 1e3:.2f} ms", end="")
+        print(f"\rMPC step took {elapsed * 1e3:.2f} ms")
 
         if jnp.isnan(state).any():
             raise RuntimeError("NaN occurred in rope state")
