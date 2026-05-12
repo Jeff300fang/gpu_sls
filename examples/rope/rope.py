@@ -14,8 +14,10 @@ for path in (REPO_ROOT, SRC_ROOT):
         sys.path.insert(0, path_str)
 
 import jax
+jax.config.update("jax_debug_nans", True)
+jax.config.update("jax_enable_x64", True)
+
 import jax.numpy as jnp
-from jax import config
 import numpy as np
 from simulation.environments import RopeEnv
 
@@ -23,8 +25,6 @@ from gpu_sls.gpu_admm import ADMMConfig
 from gpu_sls.gpu_sls import SLSConfig
 from gpu_sls.gpu_sqp import SQPConfig
 from gpu_sls.generic_mpc import GenericMPC, MPCConfig
-
-config.update("jax_enable_x64", False)
 
 
 def render_cylinder_obstacle(
@@ -131,10 +131,27 @@ def make_control_and_cylinder_constraints(
 
         obstacle_constraints = jnp.concatenate(all_constraints, axis=0)
 
+        # return jnp.concatenate(
+        #     [control_constraints, obstacle_constraints],
+        #     axis=0,
+        # )
+        left_end_x = rope_nodes[0, 0]
+        right_end_x = rope_nodes[-1, 0]
+
+        endpoint_constraints = jnp.array([
+            left_end_x,      # left end <= 0
+            -right_end_x,    # right end >= 0
+        ])
+
         return jnp.concatenate(
-            [control_constraints, obstacle_constraints],
+            [
+                control_constraints,
+                obstacle_constraints,
+                endpoint_constraints,
+            ],
             axis=0,
         )
+
 
     return constraints
 
@@ -171,43 +188,41 @@ def main():
     )
 
     # Initial rope shape
-    R = 0.06
-    theta = jnp.arange(env.num_segments + 1) * (env.params.segment_length / R)
+    # R = 0.06
+    # theta = jnp.arange(env.num_segments + 1) * (env.params.segment_length / R)
 
-    xo = jnp.vstack(
+    # xo = jnp.vstack(
+    #     (
+    #         R * jnp.sin(theta),
+    #         R * jnp.cos(theta),
+    #         jnp.linspace(0.05, 0.15, env.num_segments + 1),
+    #     )
+    # )
+
+    # xo = xo.at[0:2].set(
+    #     xo[0:2] - jnp.mean(xo[0:2], axis=1, keepdims=True)
+    # ).T
+
+    R = 0.06
+
+    theta = jnp.linspace(-jnp.pi / 2, jnp.pi / 2, env.num_segments + 1)
+    s = theta / (jnp.pi / 2)
+
+    theta_skew = theta + 0.08 * s**2
+
+    xo = jnp.stack(
         (
-            R * jnp.sin(theta),
-            R * jnp.cos(theta),
-            jnp.linspace(0.05, 0.15, env.num_segments + 1),
-        )
+            R * jnp.sin(theta_skew),
+            0.004 * s,                      # small out-of-plane asymmetry
+            0.10 - R * jnp.cos(theta_skew), # use same skewed theta
+        ),
+        axis=1,
     )
 
-    xo = xo.at[0:2].set(
-        xo[0:2] - jnp.mean(xo[0:2], axis=1, keepdims=True)
-    ).T
+    xo = xo.at[:, 0].add(0.006 * s**3)
+    xo = xo.at[:, 2].add(0.02)
 
-    # R = 0.06
-
-    # # Parameter along the U arc.
-    # theta = jnp.linspace(-jnp.pi / 2, jnp.pi / 2, env.num_segments + 1)
-
-    # # U shape in x-z.
-    # # x varies left/right
-    # # z forms the U curvature
-    # # y stays constant so the rope lies in the x-z plane
-    # xo = jnp.stack(
-    #     (
-    #         R * jnp.sin(theta),                 # x
-    #         jnp.zeros_like(theta),             # y
-    #         0.10 - R * jnp.cos(theta),         # z
-    #     ),
-    #     axis=1,
-    # )
-
-    # Center the rope in x.
-    # xo = xo.at[:, 0].set(
-    #     xo[:, 0] - jnp.mean(xo[:, 0])
-    # )
+    xo = xo.at[:, 0].set(xo[:, 0] - jnp.mean(xo[:, 0]))
     state = env.state(xo=xo)
 
     # NEW:
@@ -218,7 +233,7 @@ def main():
     n = state.shape[0]
     nu = control0.shape[0]
 
-    N = 20
+    N = 100
     dt = env.params.dt
 
     # Target rope shape
@@ -290,17 +305,16 @@ def main():
     u_min = -vmax * jnp.ones((nu,), dtype=state.dtype)
     u_max = vmax * jnp.ones((nu,), dtype=state.dtype)
 
-    cylinder_center_xy = jnp.array([0.05, 0.25], dtype=state.dtype)
     cylinder_radius = 0.10
     cylinder_z_min = 0.0
-    cylinder_z_max = 0.30
+    cylinder_z_max = 0.2
 
     # Original obstacle
-    cylinder_center_xy = jnp.array([0.05, 0.25], dtype=state.dtype)
+    cylinder_center_xy = jnp.array([0.00, 0.25], dtype=state.dtype)
 
     # Second obstacle 0.3m to the left (negative x)
     cylinder_center_xy_2 = cylinder_center_xy + jnp.array(
-        [-0.22, 0.0],
+        [-0.5, 0.0],
         dtype=state.dtype,
     )
 
@@ -330,11 +344,11 @@ def main():
     obstacles = jnp.zeros((0, 3), dtype=state.dtype)
     E_mag = 0.03
     alpha_sim = E_mag * dt
-    nc = 2 * nu + 2 * num_nodes
+    nc = 2 * nu + 2 * num_nodes + 2
     disturbance = make_constant_disturbance(n=n, alpha=alpha_sim)
 
     admm_cfg = ADMMConfig(
-        eps_abs=1e-2,
+        eps_abs=5e-2,
         eps_rel=1e-2,
         rho_max=1e3,
         max_iterations=200,
@@ -345,15 +359,15 @@ def main():
     sls_cfg = SLSConfig(
         max_sls_iterations=2,
         sls_primal_tol=1e-2,
-        enable_fastsls=False,
+        enable_fastsls=True,
         initialize_nominal=True,
-        max_initial_sqp_iterations=1,
+        max_initial_sqp_iterations=0,
         warm_start=False,
         rti=False,
     )
 
     sqp_cfg = SQPConfig(
-        max_sqp_iterations=0,
+        max_sqp_iterations=1,
         warm_start=False,
         feas_tol=1e-2,
         step_tol=1e-4,
@@ -383,7 +397,7 @@ def main():
             center_xy=cylinder_center_xy,
             radius=0.10,
             z_min=0.0,
-            z_max=0.30,
+            z_max=cylinder_z_max,
         )
 
         render_cylinder_obstacle(
@@ -392,7 +406,7 @@ def main():
             center_xy=cylinder_center_xy_2,
             radius=0.10,
             z_min=0.0,
-            z_max=0.30,
+            z_max=cylinder_z_max,
         )
 
         env.visualize(server, state, control0)
@@ -406,9 +420,10 @@ def main():
             parameter=None,
         )
 
+        elapsed = time.time() - start
+
         state = env.step(state, u0)
 
-        elapsed = time.time() - start
         print(f"\rMPC step took {elapsed * 1e3:.2f} ms")
 
         if jnp.isnan(state).any():
