@@ -14,8 +14,7 @@ for path in (REPO_ROOT, SRC_ROOT):
         sys.path.insert(0, path_str)
 
 import jax
-jax.config.update("jax_debug_nans", True)
-jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_enable_x64", False)
 
 import jax.numpy as jnp
 import numpy as np
@@ -70,6 +69,64 @@ def render_cylinder_obstacle(
     )
 
 
+def make_control_and_cone_constraints(
+    u_min: jnp.ndarray,
+    u_max: jnp.ndarray,
+    *,
+    num_nodes: int,
+    cone_centers_xy: jnp.ndarray,
+    cone_radius: float,
+    cone_z_top: float,
+    clearance: float = 0.02,
+    cone_extra_height: float = 0.10,
+):
+    slope = cone_extra_height / cone_radius
+
+    def constraints(x, u, t):
+        control_constraints = jnp.concatenate([u - u_max, u_min - u], axis=0)
+
+        rope_nodes = x[: 3 * num_nodes].reshape((num_nodes, 3))
+        node_xy = rope_nodes[:, 0:2]
+        node_z = rope_nodes[:, 2]
+
+        all_constraints = []
+
+        for center_xy in cone_centers_xy:
+            radial_dist = jnp.linalg.norm(node_xy - center_xy[None, :], axis=1)
+
+            z_required = (
+                cone_z_top
+                + clearance
+                + slope * jnp.maximum(cone_radius - radial_dist, 0.0)
+            )
+
+            cone_constraints = z_required - node_z
+
+            cone_constraints = jnp.where(
+                radial_dist <= cone_radius,
+                cone_constraints,
+                -1.0,
+            )
+
+            all_constraints.append(cone_constraints)
+
+        obstacle_constraints = jnp.concatenate(all_constraints, axis=0)
+
+        left_end_x = rope_nodes[0, 0]
+        right_end_x = rope_nodes[-1, 0]
+
+        endpoint_constraints = jnp.array([
+            left_end_x,
+            -right_end_x,
+        ])
+
+        return jnp.concatenate(
+            [control_constraints, obstacle_constraints, endpoint_constraints],
+            axis=0,
+        )
+
+    return constraints
+
 def make_control_box_constraints(
     u_min: jnp.ndarray,
     u_max: jnp.ndarray,
@@ -87,6 +144,47 @@ def make_constant_disturbance(n: int, alpha: float):
         return jnp.broadcast_to(E0, (T, n, n))
 
     return disturbance
+
+def make_control_and_ellipsoid_constraints(
+    u_min: jnp.ndarray,
+    u_max: jnp.ndarray,
+    *,
+    num_nodes: int,
+    ellipsoid_centers_xyz: jnp.ndarray,
+    ellipsoid_radii_xyz: jnp.ndarray,
+) -> Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray]:
+    def constraints(x: jnp.ndarray, u: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
+        control_constraints = jnp.concatenate([u - u_max, u_min - u], axis=0)
+
+        rope_nodes = x[: 3 * num_nodes].reshape((num_nodes, 3))
+
+        all_constraints = []
+
+        for center_xyz, radii_xyz in zip(ellipsoid_centers_xyz, ellipsoid_radii_xyz):
+            q = (rope_nodes - center_xyz[None, :]) / radii_xyz[None, :]
+            ellipsoid_constraints = 1.0 - jnp.sum(q**2, axis=1)
+            all_constraints.append(ellipsoid_constraints)
+
+        obstacle_constraints = jnp.concatenate(all_constraints, axis=0)
+
+        left_end_x = rope_nodes[0, 0]
+        right_end_x = rope_nodes[-1, 0]
+
+        endpoint_constraints = jnp.array([
+            left_end_x,      # left end <= 0
+            -right_end_x,    # right end >= 0
+        ])
+
+        return jnp.concatenate(
+            [
+                control_constraints,
+                obstacle_constraints,
+                endpoint_constraints,
+            ],
+            axis=0,
+        )
+
+    return constraints
 
 def make_control_and_cylinder_constraints(
     u_min: jnp.ndarray,
@@ -155,11 +253,60 @@ def make_control_and_cylinder_constraints(
 
     return constraints
 
+def make_projected_over_cylinder_X_in(
+    x0: jnp.ndarray,
+    x_goal: jnp.ndarray,
+    *,
+    N: int,
+    num_nodes: int,
+    cylinder_centers_xy: jnp.ndarray,
+    cylinder_radius: float,
+    cylinder_z_max: float,
+    clearance: float = 0.03,
+) -> jnp.ndarray:
+    """
+    Straight-line state trajectory from x0 to x_goal.
+
+    For rope nodes whose xy position lies inside any cylinder radius,
+    project their z position to the top of the cylinder.
+    """
+
+    alphas = jnp.linspace(0.0, 1.0, N + 1)
+
+    X = (1.0 - alphas[:, None]) * x0[None, :] + alphas[:, None] * x_goal[None, :]
+
+    rope_flat = X[:, : 3 * num_nodes]
+    rope_nodes = rope_flat.reshape((N + 1, num_nodes, 3))
+
+    node_xy = rope_nodes[:, :, 0:2]
+
+    # shape: (N + 1, num_nodes, num_cylinders)
+    d_xy = jnp.linalg.norm(
+        node_xy[:, :, None, :] - cylinder_centers_xy[None, None, :, :],
+        axis=-1,
+    )
+
+    inside_any_cylinder = jnp.any(d_xy <= cylinder_radius, axis=-1)
+
+    z_projected = cylinder_z_max + clearance
+
+    rope_nodes = rope_nodes.at[:, :, 2].set(
+        jnp.where(
+            inside_any_cylinder,
+            jnp.maximum(rope_nodes[:, :, 2], z_projected),
+            rope_nodes[:, :, 2],
+        )
+    )
+
+    X = X.at[:, : 3 * num_nodes].set(rope_nodes.reshape((N + 1, 3 * num_nodes)))
+
+    return X
+
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-viz", action="store_true", help="Run without the viser visualizer.")
-    parser.add_argument("--steps", type=int, default=150, help="Number of MPC steps to run.")
+    parser.add_argument("--steps", type=int, default=200, help="Number of MPC steps to run.")
     args = parser.parse_args()
 
     print(f"JAX backend: {jax.default_backend()}")
@@ -245,11 +392,13 @@ def main():
 
     forward_offset = 0.5
 
+    cylinder_z_max = 0.2
+
     goal_nodes = jnp.stack(
         (
             x_coords,
             jnp.full((num_nodes,), forward_offset),
-            jnp.full((num_nodes,), 0.10),
+            jnp.full((num_nodes,), 0.1),
         ),
         axis=1,
     )
@@ -264,7 +413,7 @@ def main():
     # q_state: rope + weld-target state tracking
     # r_control: velocity magnitude penalty
     # r_delta: left/right endpoint velocity mismatch penalty
-    W = jnp.array([1.0, 1.0, 1.0], dtype=state.dtype)
+    W = jnp.array([1.0, 1.0, 5.0], dtype=state.dtype)
 
     cfg = MPCConfig(
         n=n,
@@ -326,15 +475,50 @@ def main():
         axis=0,
     )
 
-    constraints_all = make_control_and_cylinder_constraints(
+    # constraints_all = make_control_and_cylinder_constraints(
+    #     u_min,
+    #     u_max,
+    #     num_nodes=num_nodes,
+    #     cylinder_centers_xy=cylinder_centers_xy,
+    #     cylinder_radius=cylinder_radius,
+    #     cylinder_z_min=cylinder_z_min,
+    #     cylinder_z_max=cylinder_z_max,
+    # )
+    ellipsoid_centers_xyz = jnp.array(
+    [
+        [cylinder_center_xy[0], cylinder_center_xy[1], cylinder_z_max / 2.0],
+        [cylinder_center_xy_2[0], cylinder_center_xy_2[1], cylinder_z_max / 2.0],
+    ],
+    dtype=state.dtype,
+)
+
+    ellipsoid_radii_xyz = jnp.array(
+        [
+            [cylinder_radius, cylinder_radius, 0.16],
+            [cylinder_radius, cylinder_radius, 0.16],
+        ],
+        dtype=state.dtype,
+    )
+
+    # constraints_all = make_control_and_ellipsoid_constraints(
+    #     u_min,
+    #     u_max,
+    #     num_nodes=num_nodes,
+    #     ellipsoid_centers_xyz=ellipsoid_centers_xyz,
+    #     ellipsoid_radii_xyz=ellipsoid_radii_xyz,
+    # )
+    constraints_all = make_control_and_cone_constraints(
         u_min,
         u_max,
         num_nodes=num_nodes,
-        cylinder_centers_xy=cylinder_centers_xy,
-        cylinder_radius=cylinder_radius,
-        cylinder_z_min=cylinder_z_min,
-        cylinder_z_max=cylinder_z_max,
+        cone_centers_xy=cylinder_centers_xy,
+        cone_radius=cylinder_radius,
+        cone_z_top=cylinder_z_max,
+        clearance=0.03,
+        cone_extra_height=0.10,
     )
+
+    nc = 2 * nu + cylinder_centers_xy.shape[0] * num_nodes + 2
 
     # obstacles = jnp.array(
     #     [[cylinder_center_xy[0], cylinder_center_xy[1], cylinder_radius]],
@@ -344,14 +528,15 @@ def main():
     obstacles = jnp.zeros((0, 3), dtype=state.dtype)
     E_mag = 0.03
     alpha_sim = E_mag * dt
-    nc = 2 * nu + 2 * num_nodes + 2
+    # nc = 2 * nu + 2 * num_nodes + 2
+    # nc = 2 * nu + ellipsoid_centers_xyz.shape[0] * num_nodes + 2
     disturbance = make_constant_disturbance(n=n, alpha=alpha_sim)
 
     admm_cfg = ADMMConfig(
         eps_abs=5e-2,
         eps_rel=1e-2,
         rho_max=1e3,
-        max_iterations=200,
+        max_iterations=1000,
         rho_update_frequency=25,
         initial_rho=10.0,
     )
@@ -359,7 +544,7 @@ def main():
     sls_cfg = SLSConfig(
         max_sls_iterations=2,
         sls_primal_tol=1e-2,
-        enable_fastsls=True,
+        enable_fastsls=False,
         initialize_nominal=True,
         max_initial_sqp_iterations=0,
         warm_start=False,
@@ -374,6 +559,8 @@ def main():
         line_search=True,
     )
 
+    X_in = jnp.tile(state[None, :], (N + 1, 1))
+
     controller = GenericMPC(
         sls_cfg,
         sqp_cfg,
@@ -386,7 +573,8 @@ def main():
         num_constraints=nc,
         disturbance=disturbance,
         shift=1,
-        X_in=jnp.tile(state[None, :], (N + 1, 1)),
+        # X_in=jnp.tile(state[None, :], (N + 1, 1)),
+        X_in=X_in,
         U_in=jnp.tile(control0[None, :], (N, 1)),
     )
 

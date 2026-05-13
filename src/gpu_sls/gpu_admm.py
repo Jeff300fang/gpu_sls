@@ -271,7 +271,8 @@ def admm_residuals(z, w, w_prev, y, rho, eps_abs=1e-2, eps_rel=1e-2):
     w_norm = jnp.linalg.norm(w.reshape(-1), ord=jnp.inf)
     y_norm = jnp.linalg.norm(y.reshape(-1), ord=jnp.inf)
 
-    eps_pri = eps_abs + eps_rel * jnp.maximum(z_norm, w_norm)
+    # eps_pri = eps_abs + eps_rel * jnp.maximum(z_norm, w_norm)
+    eps_pri = eps_abs
     eps_dual = eps_abs + eps_rel * (rho * y_norm)
 
     return r_norm, s_norm, eps_pri, eps_dual
